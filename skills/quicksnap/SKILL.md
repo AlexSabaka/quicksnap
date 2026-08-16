@@ -78,6 +78,25 @@ Indices can reorder between sessions — if a shot looks like the wrong camera, 
 
 Use `--rotate` if a camera is mounted upside-down; it applies before cropping.
 
+## Deconvolution — reach for this before upscaling
+
+`--deconv` measures the camera's PSF from the frame itself and runs regularized
+Richardson-Lucy. Unlike `--upscale` it **recovers** detail rather than generating it: four
+independent frames deconvolve to identical readings, so it's reproducible, not invented.
+
+```bash
+uv run quicksnap.py --device 0 --crop 490,290,440,110 --preset screen --deconv
+```
+
+Use it when small text or digits are marginal. It costs a few seconds.
+
+**Do not use it on blown-out subjects.** Richardson-Lucy cannot recover what the sensor
+clipped, and makes saturated regions worse — dark text inside a white box gets *less* readable.
+Check `clipped_pct` from `--measure` first; if the thing being read is blown, fix exposure or
+framing instead.
+
+If a reading matters, prefer the deconvolved and plain versions agreeing over either alone.
+
 ## Super-resolution: usually don't
 
 `--upscale 2` / `--upscale 4` runs UltraSharp (4× ESRGAN). Off by default, and it should

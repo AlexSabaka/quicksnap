@@ -81,13 +81,52 @@ whole frame, so whatever you need to read should fill as much of it as possible.
 occupying half the frame gets ~150 elements; filling the frame it gets ~290. Move the camera or
 re-aim it before reaching for any software stage.
 
-### What was tried instead, and measured worse
+## Deconvolution (`--deconv`)
 
-Classical deconvolution was implemented and tested against these captures: Wiener, and
-Richardson-Lucy with both Gaussian (σ 3.84) and disc (r 4.5) kernels, 30 iterations. RL-disc
-scored **607.9 against the original's 150.1** on variance-of-Laplacian — and was visibly *less*
-readable, with ringing halos and grid artifacts; `grnd` degraded toward `bind`. It is not
-shipped. At ~9 px of defocus there is nothing left above the cutoff to restore.
+Off by default; genuinely useful when you need to read small text.
+
+```bash
+uv run quicksnap.py --device 0 --crop 490,290,440,110 --preset screen --deconv
+```
+
+It measures the PSF **from the frame itself** — averaging ~1000+ edge profiles, each aligned to
+its own sub-pixel 50% crossing (the ISO 12233 slanted-edge idea, applied to whatever edges the
+scene happens to contain) — then runs Richardson-Lucy with total-variation regularization.
+Measurement happens on the full frame before cropping, since the PSF belongs to the optics and
+a tight crop rarely holds enough edges.
+
+**Measuring beats assuming.** On the reference rig the profile fits a Moffat (a 4.1, β 2.5)
+far better than a defocus disc — a lens-aberration signature, not a focus error, which is why
+nothing was sharp at any subject distance. An earlier attempt here used a *guessed* Gaussian /
+disc kernel with *unregularized* RL and concluded deconvolution was useless. That conclusion
+was wrong; it was testing a bad kernel and a known-ringy algorithm.
+
+What the regularization buys, measured:
+
+| variant | tenengrad | pixels overshooting |
+|---|---|---|
+| original | 5074 | 0% |
+| Wiener (nsr 0.003) | 49655 | 26.7% |
+| RL, no TV | 23275 | 12.4% |
+| **RL + TV 0.02** (default) | 14730 | **6.7%** |
+| RL + TV 0.05 | 12081 | 5.5% |
+
+**It recovers rather than invents** — the important check. Deconvolving four *independent*
+frames of the same scene produced identical readings, and the inter-frame noise/contrast ratio
+was **0.98×** the original's. A process hallucinating detail from noise would scatter between
+frames and drive that ratio up.
+
+### Where it fails
+
+**Clipped highlights get worse, not better.** RL cannot recover detail the sensor never
+recorded, and its multiplicative update pushes saturated regions further. On the test frame the
+bright yellow glyphs sharpened clearly while dark text inside a blown-white box became *less*
+readable. Check `clipped_pct` from `--measure` first — if the thing you need to read sits in a
+blown region, fix exposure or framing instead.
+
+`--deconv-tv` (default 0.02) and `--deconv-iters` (default 40) are there to tune. Setting
+`--deconv-tv 0` gives plain RL, which rings. When `--deconv` is on, the preset's unsharp mask
+is automatically cut to 35% so the two don't sharpen the same edges twice.
 
 ## Measurements
 
@@ -219,7 +258,10 @@ something) and a `/snap` command.
 --usm R:A:T         override unsharp mask
 --wb MODE           shades | gray | whitepatch | none
 --no-levels         skip the levels stretch
---upscale 2|4       super-resolve (slow; see above)
+--deconv            measure the PSF and deconvolve (recovers real detail)
+--deconv-tv L       TV regularization strength (default 0.02)
+--deconv-iters N    Richardson-Lucy iterations (default 40)
+--upscale 2|4       super-resolve (slow; generative — see above)
 --fit N / --full    long-edge cap, or native size
 --stats / --json    report measurements
 --keep-raw PATH     also save the unprocessed frame
