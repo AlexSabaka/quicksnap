@@ -119,6 +119,13 @@ It is off by default on purpose:
 > at a client's hardware. The rest of quicksnap has no such restriction; the default path never
 > touches the model.
 
+## Licence
+
+MIT — see [LICENSE](LICENSE). That covers this repo's code. UltraSharp is
+CC-BY-NC-SA-4.0 and is **downloaded at runtime rather than vendored**, so it doesn't
+change the licence of anything here; but if you enable `--upscale`, that model's
+non-commercial terms apply to how you use its output.
+
 ## Requirements
 
 - `ffmpeg` (`brew install ffmpeg`) — macOS/avfoundation for now.
