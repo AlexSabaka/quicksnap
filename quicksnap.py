@@ -83,6 +83,62 @@ def sharpness(gray: np.ndarray) -> float:
     return float(lap.var())
 
 
+def tenengrad(gray: np.ndarray) -> float:
+    """Sobel gradient energy. The focus metric -- use this, not `sharpness`.
+
+    Variance-of-Laplacian has misled this project three separate times: it ranked a
+    noisy high-gain frame above the converged ones, it scored a ringing
+    Richardson-Lucy result 4x above a more readable original, and it called a
+    defocused frame sharp because the subject had big high-contrast features. It
+    responds to noise and to clipping, not only to focus.
+
+    Tenengrad weights mid-frequencies where defocus actually acts, and the focus-
+    measure literature consistently reports it as the noise-robust choice.
+    """
+    gx = (gray[:-2, 2:] + 2 * gray[1:-1, 2:] + gray[2:, 2:]
+          - gray[:-2, :-2] - 2 * gray[1:-1, :-2] - gray[2:, :-2])
+    gy = (gray[2:, :-2] + 2 * gray[2:, 1:-1] + gray[2:, 2:]
+          - gray[:-2, :-2] - 2 * gray[:-2, 1:-1] - gray[:-2, 2:])
+    return float((gx * gx + gy * gy).mean())
+
+
+def edge_widths(gray: np.ndarray, min_step: float = 40.0) -> np.ndarray:
+    """10-90% rise distance of every clean step edge found, in pixels.
+
+    This is the honest optical measurement: it reports the physical blur, and unlike
+    any focus score it has real units and a known target (a focused system on this
+    class of sensor lands at ~1.0-1.5 px). Scans horizontally for vertical edges.
+    """
+    if gray.shape[0] < 32 or gray.shape[1] < 40:
+        return np.array([])
+    d = np.abs(np.diff(gray, axis=1))
+    out = []
+    for y in range(6, gray.shape[0] - 6, 2):
+        row, dd = gray[y], d[y]
+        for x in range(16, gray.shape[1] - 16):
+            if dd[x] <= 20 or dd[x] != dd[max(0, x - 6):x + 7].max():
+                continue
+            seg = row[x - 14:x + 15].astype(np.float64)
+            if len(seg) != 29:
+                continue
+            lo, hi = seg[:4].mean(), seg[-4:].mean()
+            if abs(hi - lo) < min_step:
+                continue
+            s = (seg - lo) / (hi - lo)
+            if hi < lo:
+                s = s[::-1]                      # normalise to a rising edge
+            if not np.all(np.isfinite(s)):
+                continue
+            if not (s[:3].mean() < 0.25 and s[-3:].mean() > 0.75):
+                continue                          # not a clean monotonic step
+            idx = np.arange(29)
+            m = np.argsort(s)                     # interp needs increasing x
+            w = abs(np.interp(0.9, s[m], idx[m]) - np.interp(0.1, s[m], idx[m]))
+            if 0.3 < w < 25:
+                out.append(w)
+    return np.array(out)
+
+
 def srgb_to_linear(x: np.ndarray) -> np.ndarray:
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
@@ -107,17 +163,58 @@ def content_mask(rgb: np.ndarray) -> np.ndarray:
 # ------------------------------------------------------------------------- capture
 
 
-def list_devices() -> str:
+def video_devices() -> list[tuple[int, str]]:
+    """(index, name) for each avfoundation video device, in ffmpeg's own order."""
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
-    lines = [
-        re.sub(r"^\[[^\]]*\]\s*", "", ln)
-        for ln in proc.stderr.splitlines()
-        if "AVFoundation" in ln or re.search(r"^\[[^\]]*\]\s*\[\d+\]", ln)
-    ]
+    devs, in_video = [], False
+    for ln in proc.stderr.splitlines():
+        body = re.sub(r"^\[[^\]]*\]\s*", "", ln)
+        if "video devices" in body:
+            in_video = True
+            continue
+        if "audio devices" in body:
+            in_video = False
+            continue
+        m = re.match(r"\[(\d+)\]\s+(.*)$", body)
+        if in_video and m:
+            devs.append((int(m.group(1)), m.group(2).strip()))
+    return devs
+
+
+def unique_ids() -> list[str]:
+    """Per-port Unique IDs from system_profiler, in its enumeration order.
+
+    Two identical camera modules both report as `HD Camera`, so the name alone can't
+    address them. These IDs are stable as long as each camera stays in its USB port,
+    which is exactly the case for a fixed bench rig.
+    """
+    try:
+        out = subprocess.run(["system_profiler", "SPCameraDataType"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    return re.findall(r"Unique ID:\s*(\S+)", out)
+
+
+def list_devices() -> str:
+    devs = video_devices()
+    uids = unique_ids()
+    lines = ["avfoundation video devices:"]
+    seen: dict[str, int] = {}
+    for i, (idx, name) in enumerate(devs):
+        uid = uids[i] if i < len(uids) else ""
+        lines.append(f"  [{idx}] {name}" + (f"   uid {uid}" if uid else ""))
+        seen[name] = seen.get(name, 0) + 1
+    dupes = [n for n, c in seen.items() if c > 1]
+    if dupes:
+        lines += [
+            "",
+            f"  warning: {', '.join(repr(d) for d in dupes)} appears more than once.",
+            "  Select by INDEX (--device 0 / --device 1); a name would silently take the first.",
+        ]
     return "\n".join(lines)
 
 
@@ -148,6 +245,34 @@ def capture_frames(device: str, size: str, fps: int, count: int, outdir: Path,
     if len(frames) < count:
         log(f"  note: asked for {count} frames, got {len(frames)}", quiet=quiet)
     return frames
+
+
+def stream_gray(device: str, size: str, fps: int, pixel_format: str | None):
+    """Yield successive greyscale frames from a long-lived ffmpeg process.
+
+    The normal snapshot path pays a device-open every call, which is far too slow to
+    focus a lens against. Here one process stays open and streams raw frames, so the
+    readout tracks the barrel in real time. Greyscale keeps the pipe cheap.
+    """
+    w, h = (int(v) for v in size.split("x"))
+    cmd = ["ffmpeg", "-hide_banner", "-v", "error", "-f", "avfoundation",
+           "-framerate", str(fps), "-video_size", size]
+    if pixel_format:
+        cmd += ["-pixel_format", pixel_format]
+    cmd += ["-i", device, "-fps_mode", "passthrough",
+            "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    nbytes = w * h
+    try:
+        while True:
+            buf = proc.stdout.read(nbytes)
+            if not buf or len(buf) < nbytes:
+                break
+            yield np.frombuffer(buf, np.uint8).reshape(h, w).astype(np.float32)
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def find_stable_start(scores: list[float], lumas: list[float]) -> int:
@@ -265,6 +390,13 @@ def unsharp(img: Image.Image, radius: float, amount: float, threshold: int) -> I
     )
 
 
+def apply_rotation(img: Image.Image, deg: int) -> Image.Image:
+    """Cameras get mounted whichever way the bracket allows."""
+    if deg % 360 == 0:
+        return img
+    return img.rotate(-(deg % 360), expand=True)
+
+
 def parse_crop(spec: str, w: int, h: int) -> tuple[int, int, int, int]:
     m = re.fullmatch(r"center:(\d+(?:\.\d+)?)%", spec.strip())
     if m:
@@ -359,6 +491,112 @@ def upscale(rgb: np.ndarray, factor: int, tile: int, quiet: bool) -> np.ndarray:
     return out
 
 
+# ------------------------------------------------------------------- focus + measure
+
+
+def optical_report(gray: np.ndarray, panel_px: int | None) -> dict:
+    """Physical blur measurement, in real units, with a known target."""
+    w = edge_widths(gray)
+    rep = {
+        "edges": int(len(w)),
+        "clipped_pct": round(float((gray >= 250).mean()) * 100, 2),
+        "crushed_pct": round(float((gray <= 8).mean()) * 100, 2),
+        "mean_luma": round(float(gray.mean()), 1),
+        "tenengrad": round(tenengrad(gray), 1),
+    }
+    if len(w) >= 20:
+        med = float(np.median(w))
+        rep["edge_rise_px"] = round(med, 2)
+        # 10-90% of a gaussian edge spans 2.563 sigma; FWHM = 2.355 sigma
+        rep["psf_fwhm_px"] = round(2.355 * med / 2.563, 2)
+        rep["resolvable_across"] = int(gray.shape[1] / med)
+        if panel_px:
+            rep["panel_px"] = panel_px
+            rep["resolves_panel"] = rep["resolvable_across"] >= panel_px
+    return rep
+
+
+def run_measure(args, quiet: bool) -> int:
+    with tempfile.TemporaryDirectory(prefix="quicksnap-m-") as td:
+        frames = capture_frames(args.device, args.size, args.fps, args.max_frames,
+                                Path(td), args.pixel_format, quiet)
+        img = Image.open(frames[-1]).convert("RGB")
+        img = apply_rotation(img, args.rotate)
+        if args.crop:
+            x, y, cw, ch = parse_crop(args.crop, img.width, img.height)
+            img = img.crop((x, y, x + cw, y + ch))
+        gray = np.asarray(img.convert("L"), dtype=np.float32)
+
+    rep = optical_report(gray, args.panel_px)
+    if args.json:
+        print(json.dumps(rep, indent=2))
+        return 0
+
+    print(f"region            {gray.shape[1]}x{gray.shape[0]} px   device {args.device}")
+    print(f"exposure          mean luma {rep['mean_luma']}   "
+          f"clipped {rep['clipped_pct']}%   crushed {rep['crushed_pct']}%")
+    if "edge_rise_px" not in rep:
+        print(f"blur              not enough clean edges ({rep['edges']}) to measure —")
+        print("                  aim at something with hard high-contrast borders")
+        return 0
+    print(f"blur              10-90% rise {rep['edge_rise_px']} px over {rep['edges']} edges")
+    print(f"                  PSF FWHM ~{rep['psf_fwhm_px']} px   (focused optics: ~1.0-1.5)")
+    print(f"resolvable across {rep['resolvable_across']} elements")
+    if args.panel_px:
+        ok = rep["resolves_panel"]
+        print(f"target panel      {args.panel_px} px -> "
+              f"{'RESOLVED' if ok else 'NOT RESOLVED'}")
+    if rep["psf_fwhm_px"] > 3.0:
+        print()
+        print("  This is optical defocus. No amount of sharpening or upscaling recovers it —")
+        print("  detail above the optical cutoff is destroyed, not merely attenuated.")
+        print("  Fix it mechanically: run --focus-assist and turn the lens barrel.")
+    return 0
+
+
+def run_focus_assist(args, quiet: bool) -> int:
+    box = None
+    if args.crop:
+        # resolve against the capture size; the stream is pre-rotation raw frames
+        cw, ch = (int(v) for v in args.size.split("x"))
+        box = parse_crop(args.crop, cw, ch)
+
+    print(f"focus assist — device {args.device}, {args.size}"
+          + (f", roi {box[2]}x{box[3]} at {box[0]},{box[1]}" if box else ""))
+    print("turn the lens barrel slowly; stop where the bar peaks.  Ctrl-C to finish.\n")
+
+    SETTLE = 6          # 3A is still hunting; those frames must not set the reference
+    best, n = 0.0, 0
+    try:
+        for g in stream_gray(args.device, args.size, args.fps, args.pixel_format):
+            n += 1
+            if box:
+                x, y, w, h = box
+                g = g[y:y + h, x:x + w]
+            score = tenengrad(g)
+            if n <= SETTLE:
+                print(f"\r  settling… {n}/{SETTLE}", end="", flush=True)
+                continue
+            best = max(best, score)
+            if n % 2:                      # halve the redraw rate, keep it readable
+                continue
+            frac = score / best if best > 0 else 0.0
+            bar = "#" * int(46 * frac)
+            mark = "  <== PEAK" if score >= best * 0.995 else ""
+            print(f"\r  {score:9.1f}  {frac * 100:5.1f}% of best |{bar:<46}|{mark}   ",
+                  end="", flush=True)
+    except KeyboardInterrupt:
+        pass
+
+    print("\n")
+    if n <= SETTLE:
+        die(f"no usable frames from device {args.device!r}")
+    print(f"best score {best:.1f} over {n - SETTLE} frames.")
+    print("Now confirm it optically:  quicksnap --measure"
+          + (f" --crop {args.crop}" if args.crop else ""))
+    return 0
+
+
 # ------------------------------------------------------------------------------ cli
 
 
@@ -375,8 +613,12 @@ def build_parser() -> argparse.ArgumentParser:
 """,
     )
     p.add_argument("-o", "--out", default="snap.jpg", help="output path (default: snap.jpg)")
-    p.add_argument("--device", default="HD Camera", help="avfoundation device name or index")
+    p.add_argument("--device", default="0",
+                   help="avfoundation device INDEX or name (default: 0). Prefer the index — "
+                        "identical modules share a name and a name takes the first match")
     p.add_argument("--list-devices", action="store_true", help="show cameras and exit")
+    p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0,
+                   help="rotate the frame, for awkwardly mounted cameras")
     p.add_argument("--size", default="1920x1080", help="capture size (default: 1920x1080)")
     p.add_argument("--fps", type=int, default=30, help="requested framerate (default: 30)")
     p.add_argument("--pixel-format", default=None, help="force capture pixel format")
@@ -405,6 +647,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true", help="no resize, keep native size")
     p.add_argument("--quality", type=int, default=92, help="JPEG quality (default: 92)")
 
+    p.add_argument("--focus-assist", action="store_true",
+                   help="live sharpness readout — turn the lens barrel until it peaks")
+    p.add_argument("--measure", action="store_true",
+                   help="report physical blur (edge rise, PSF FWHM) and exposure")
+    p.add_argument("--panel-px", type=int, default=None, metavar="N",
+                   help="with --measure: native pixel width of the display being shot, "
+                        "to report whether its pixels are actually resolved")
+
     p.add_argument("--stats", action="store_true", help="report measurements")
     p.add_argument("--json", action="store_true", help="emit stats as JSON on stdout")
     p.add_argument("-q", "--quiet", action="store_true", help="suppress progress")
@@ -423,6 +673,11 @@ def main() -> int:
 
     if not shutil.which("ffmpeg"):
         die("ffmpeg not found on PATH (brew install ffmpeg)")
+
+    if args.focus_assist:
+        return run_focus_assist(args, quiet)
+    if args.measure:
+        return run_measure(args, quiet)
 
     preset = dict(PRESETS[args.preset])
     if args.usm:
@@ -455,6 +710,7 @@ def main() -> int:
         stats["sharpness_raw"] = round(scores[idx], 1)
 
         img = Image.open(chosen).convert("RGB")
+        img = apply_rotation(img, args.rotate)
         if args.keep_raw:
             img.save(args.keep_raw, quality=95)
 

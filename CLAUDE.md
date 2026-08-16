@@ -11,6 +11,21 @@ design — `quicksnap.py` is the whole tool. Don't package it, don't split it in
 - The consumer of the output is a vision model, not a human eye. Legibility and colour fidelity
   win over aesthetic grade. Invented detail is worse than blur.
 
+## Two sharpness metrics, on purpose
+
+- `sharpness()` (variance of Laplacian) — used **only** to compare frames of one burst.
+- `tenengrad()` (Sobel energy) — used for **focus** decisions.
+
+They are not interchangeable. Variance-of-Laplacian responds to noise and to clipping as much
+as to focus, and it has misled this project three separate times: it ranked a noisy high-gain
+frame above the converged ones; it scored a ringing Richardson-Lucy output 4× above a more
+readable original; and it called a defocused frame sharp because the subject had large
+high-contrast features. Don't "simplify" by collapsing them into one.
+
+For anything physical, prefer `edge_widths()` / `optical_report()` — those have real units
+(pixels of 10–90% rise) and a known target (~1.0–1.5 px focused), so they can't flatter
+themselves the way a unitless score can.
+
 ## Things that will break if you "clean them up"
 
 - **`-fps_mode passthrough` in `capture_frames`.** Without it ffmpeg duplicates frames to pad

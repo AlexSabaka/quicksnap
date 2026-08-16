@@ -1,0 +1,16 @@
+{
+  "name": "quicksnap-marketplace",
+  "owner": {
+    "name": "Oleksii Kruhlyk"
+  },
+  "metadata": {
+    "description": "Local marketplace for the quicksnap bench-camera plugin."
+  },
+  "plugins": [
+    {
+      "name": "quicksnap",
+      "source": "./",
+      "description": "Give Claude eyes at the electronics bench: webcam capture of scope/LCD readouts, LED states, breadboard wiring, and solder joints for when a screenshot or UART dump won't cut it."
+    }
+  ]
+}

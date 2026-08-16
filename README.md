@@ -23,6 +23,52 @@ converged. On the reference rig that frame scores **15.0** on variance-of-Laplac
 scores **109.5**. Everything else this tool does is a rounding error next to throwing away the
 first few frames.
 
+## Focus first
+
+If your shots are soft, **measure before you reach for any filter**:
+
+```bash
+uv run quicksnap.py --device 0 --measure --panel-px 320
+```
+
+```
+blur              10-90% rise 11.67 px over 2936 edges
+                  PSF FWHM ~10.73 px   (focused optics: ~1.0-1.5)
+resolvable across 164 elements
+target panel      320 px -> NOT RESOLVED
+```
+
+A FWHM far above ~1.5 px is **optical defocus**, and no amount of sharpening, deconvolution or
+super-resolution recovers it — detail above the optical cutoff is destroyed, not attenuated.
+Measured on this rig: the LCD's own pixel lattice sat 25 dB down, i.e. simply absent.
+
+These cheap modules use M12/S-mount lenses, which have no focus ring — **the thread is the
+focus mechanism**. Turn the barrel while watching:
+
+```bash
+uv run quicksnap.py --device 0 --focus-assist --crop center:40%
+```
+
+```
+     9052.0   99.5% of best |#############################################|  <== PEAK
+```
+
+Stop at the peak, lock the barrel (set screw or a dab of thread locker), then re-run
+`--measure` to confirm. On this rig that's worth ~7× linear resolution — more than every
+software stage in this tool put together.
+
+Why this matters more than it sounds: at ~9 cm a 320-px-wide panel spans ~1060 camera pixels,
+so a focused lens would resolve ~815 elements — **above the panel's own resolution**. Defocused,
+it resolves ~113. Same sensor, same distance, same code.
+
+### What was tried instead, and measured worse
+
+Classical deconvolution was implemented and tested against these captures: Wiener, and
+Richardson-Lucy with both Gaussian (σ 3.84) and disc (r 4.5) kernels, 30 iterations. RL-disc
+scored **607.9 against the original's 150.1** on variance-of-Laplacian — and was visibly *less*
+readable, with ringing halos and grid artifacts; `grnd` degraded toward `bind`. It is not
+shipped. At ~9 px of defocus there is nothing left above the cutoff to restore.
+
 ## Measurements
 
 All on one machine (M-series Mac, a generic "HD Camera" USB webcam), sharpness =
@@ -140,7 +186,11 @@ something) and a `/snap` command.
 ## Useful flags
 
 ```
---device NAME       camera (--list-devices to enumerate)
+--device N          camera INDEX (--list-devices to enumerate)
+--rotate 0|90|180|270   for awkwardly mounted cameras
+--focus-assist      live sharpness readout; turn the barrel until it peaks
+--measure           physical blur report (edge rise, PSF FWHM, exposure)
+--panel-px N        with --measure: is an N-px-wide display actually resolved?
 --size WxH          capture size (default 1920x1080)
 --warmup auto|N     frames to discard while 3A settles
 --max-frames N      capture budget (default 12)

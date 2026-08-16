@@ -53,6 +53,27 @@ cropped to that region. A tight crop beats any amount of upscaling.
 `frame_scores` shows every captured frame; the first one or two being ~10× worse than the rest
 is normal and expected — that is exactly what the tool exists to discard.
 
+## If the shot is soft, measure — don't reach for upscaling
+
+```bash
+uv run quicksnap.py --device 0 --measure --panel-px 320
+```
+
+`psf_fwhm_px` is the number that matters. Focused optics land at ~1.0–1.5 px.
+
+- **FWHM above ~3 px is optical defocus.** Say so to the user and tell them to run
+  `--focus-assist` and turn the lens barrel (these modules are M12 — the thread is the focus
+  mechanism, there's no ring). Do **not** respond by adding `--upscale` or more sharpening:
+  the detail is destroyed, not hidden, and every software stage will only add artifacts.
+- `resolves_panel: false` means the camera physically cannot resolve that display's pixels —
+  either refocus, or move the camera closer and re-crop.
+
+Multiple identical cameras enumerate under the same name, so **always select by index**
+(`--device 0`). `--list-devices` warns when names collide and shows stable per-port UIDs.
+Indices can reorder between sessions — if a shot looks like the wrong camera, re-list.
+
+Use `--rotate` if a camera is mounted upside-down; it applies before cropping.
+
 ## Super-resolution: usually don't
 
 `--upscale 2` / `--upscale 4` runs UltraSharp (4× ESRGAN). Off by default, and it should
