@@ -495,7 +495,19 @@ def upscale(rgb: np.ndarray, factor: int, tile: int, quiet: bool) -> np.ndarray:
 
 
 def optical_report(gray: np.ndarray, panel_px: int | None) -> dict:
-    """Physical blur measurement, in real units, with a known target."""
+    """Physical blur measurement, in real units, with a known target.
+
+    Uses the 10th percentile of edge widths, NOT the median. A scene contains
+    genuinely soft edges -- shadows, gradients, out-of-focus background -- alongside
+    genuinely sharp ones, so the median measures *the scene*. The system's PSF is a
+    lower bound: no edge can be sharper than the PSF, so the narrowest edges present
+    are what reveal the optical limit.
+
+    This was originally written with the median and it was badly wrong: it reported
+    ~10.9 px PSF and "161 resolvable" for a frame that visibly resolved breadboard
+    holes and legible on-screen text. p10 gives ~6.8 px on the same frame, which
+    matches what the image actually shows.
+    """
     w = edge_widths(gray)
     rep = {
         "edges": int(len(w)),
@@ -504,12 +516,13 @@ def optical_report(gray: np.ndarray, panel_px: int | None) -> dict:
         "mean_luma": round(float(gray.mean()), 1),
         "tenengrad": round(tenengrad(gray), 1),
     }
-    if len(w) >= 20:
-        med = float(np.median(w))
-        rep["edge_rise_px"] = round(med, 2)
+    if len(w) >= 40:
+        sharp = float(np.percentile(w, 10))    # the system limit
+        rep["edge_rise_px"] = round(sharp, 2)
+        rep["scene_median_px"] = round(float(np.median(w)), 2)
         # 10-90% of a gaussian edge spans 2.563 sigma; FWHM = 2.355 sigma
-        rep["psf_fwhm_px"] = round(2.355 * med / 2.563, 2)
-        rep["resolvable_across"] = int(gray.shape[1] / med)
+        rep["psf_fwhm_px"] = round(2.355 * sharp / 2.563, 2)
+        rep["resolvable_across"] = int(gray.shape[1] / sharp)
         if panel_px:
             rep["panel_px"] = panel_px
             rep["resolves_panel"] = rep["resolvable_across"] >= panel_px
@@ -539,18 +552,22 @@ def run_measure(args, quiet: bool) -> int:
         print(f"blur              not enough clean edges ({rep['edges']}) to measure —")
         print("                  aim at something with hard high-contrast borders")
         return 0
-    print(f"blur              10-90% rise {rep['edge_rise_px']} px over {rep['edges']} edges")
-    print(f"                  PSF FWHM ~{rep['psf_fwhm_px']} px   (focused optics: ~1.0-1.5)")
+    print(f"blur              sharpest edges {rep['edge_rise_px']} px 10-90% "
+          f"(of {rep['edges']} edges; scene median {rep['scene_median_px']})")
+    print(f"                  PSF FWHM ~{rep['psf_fwhm_px']} px   (good optics: ~1.0-1.5)")
     print(f"resolvable across {rep['resolvable_across']} elements")
     if args.panel_px:
         ok = rep["resolves_panel"]
         print(f"target panel      {args.panel_px} px -> "
               f"{'RESOLVED' if ok else 'NOT RESOLVED'}")
+        if not ok:
+            print(f"                  fill more of the frame with it, or accept that its "
+                  f"individual\n                  pixels won't resolve (text may still read fine)")
     if rep["psf_fwhm_px"] > 3.0:
         print()
-        print("  This is optical defocus. No amount of sharpening or upscaling recovers it —")
-        print("  detail above the optical cutoff is destroyed, not merely attenuated.")
-        print("  Fix it mechanically: run --focus-assist and turn the lens barrel.")
+        print("  Soft. If this doesn't improve at any subject distance it's the lens, not")
+        print("  focus — sharpening and upscaling can't recover it either way. Capturing at")
+        print("  a higher --size still helps until this number stops falling.")
     return 0
 
 

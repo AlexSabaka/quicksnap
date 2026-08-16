@@ -59,14 +59,18 @@ is normal and expected — that is exactly what the tool exists to discard.
 uv run quicksnap.py --device 0 --measure --panel-px 320
 ```
 
-`psf_fwhm_px` is the number that matters. Focused optics land at ~1.0–1.5 px.
+`resolvable_across` is the number that matters: how many distinct elements the system can lay
+across the frame. `psf_fwhm_px` is the same fact in pixels; good optics land at ~1.0–1.5.
 
-- **FWHM above ~3 px is optical defocus.** Say so to the user and tell them to run
-  `--focus-assist` and turn the lens barrel (these modules are M12 — the thread is the focus
-  mechanism, there's no ring). Do **not** respond by adding `--upscale` or more sharpening:
-  the detail is destroyed, not hidden, and every software stage will only add artifacts.
-- `resolves_panel: false` means the camera physically cannot resolve that display's pixels —
-  either refocus, or move the camera closer and re-crop.
+- **FWHM above ~3 px means the detail is gone, not hidden.** Do **not** respond by adding
+  `--upscale` or more sharpening — every software stage will only add artifacts. Suggest
+  `--focus-assist` (these are M12 lenses; the thread is the focus mechanism, though it is
+  often factory-glued), or a larger `--size`.
+- `resolves_panel: false` means individual pixels of that display won't resolve. **Text may
+  still read fine** — glyphs are much lower-frequency than the pixel grid, so check the image
+  before telling the user it failed.
+- The single most effective fix is **framing**: `resolvable_across` is spread over the whole
+  frame, so get the subject to fill it. Re-aiming beats every filter.
 
 Multiple identical cameras enumerate under the same name, so **always select by index**
 (`--device 0`). `--list-devices` warns when names collide and shows stable per-port UIDs.

@@ -26,6 +26,14 @@ For anything physical, prefer `edge_widths()` / `optical_report()` — those hav
 (pixels of 10–90% rise) and a known target (~1.0–1.5 px focused), so they can't flatter
 themselves the way a unitless score can.
 
+**`optical_report` takes the 10th percentile of edge widths, never the median.** A scene has
+genuinely soft edges (shadows, gradients, out-of-focus background) as well as sharp ones, so
+the median measures the *scene*, not the system. The PSF is a lower bound — nothing can be
+sharper than it — so the narrowest edges are what reveal the optical limit. Shipped once with
+the median and it reported ~10.9 px PSF and "161 resolvable" for a frame that visibly resolved
+breadboard holes and readable on-screen text; p10 gave ~6.5 px on the same frame. If a
+measurement disagrees with what the image obviously shows, distrust the measurement.
+
 ## Things that will break if you "clean them up"
 
 - **`-fps_mode passthrough` in `capture_frames`.** Without it ffmpeg duplicates frames to pad

@@ -32,18 +32,38 @@ uv run quicksnap.py --device 0 --measure --panel-px 320
 ```
 
 ```
-blur              10-90% rise 11.67 px over 2936 edges
-                  PSF FWHM ~10.73 px   (focused optics: ~1.0-1.5)
-resolvable across 164 elements
+blur              sharpest edges 6.53 px 10-90% (of 1639 edges; scene median 12.75)
+                  PSF FWHM ~6.0 px   (good optics: ~1.0-1.5)
+resolvable across 294 elements
 target panel      320 px -> NOT RESOLVED
 ```
 
-A FWHM far above ~1.5 px is **optical defocus**, and no amount of sharpening, deconvolution or
-super-resolution recovers it — detail above the optical cutoff is destroyed, not attenuated.
-Measured on this rig: the LCD's own pixel lattice sat 25 dB down, i.e. simply absent.
+`resolvable across` is the honest capability number: how many distinct elements the system can
+lay across the frame. A FWHM far above ~1.5 px means detail above the optical cutoff is
+destroyed, not attenuated — no amount of sharpening, deconvolution or super-resolution brings
+it back. Measured on this rig, the target LCD's own pixel lattice sat 25 dB down, i.e. absent.
 
-These cheap modules use M12/S-mount lenses, which have no focus ring — **the thread is the
-focus mechanism**. Turn the barrel while watching:
+**Why the sharpest decile, not the median.** A scene contains genuinely soft edges — shadows,
+gradients, out-of-focus background — as well as sharp ones, so the median measures the *scene*.
+The PSF is a lower bound: nothing can be sharper than it, so the narrowest edges reveal the
+system limit. This tool originally used the median and was badly wrong, reporting ~10.9 px and
+"161 resolvable" for a frame that visibly resolved breadboard holes and legible on-screen text.
+
+**Resolution still buys real detail** — verify it on your own rig rather than assuming:
+
+| `--size` | PSF (sharpest decile) | resolvable across |
+|---|---|---|
+| 640×480 | 3.87 px | 165 |
+| 1280×720 | 5.24 px | 244 |
+| 1920×1080 | 6.83 px | **281** |
+
+Resolvable detail *rises* with capture size, so 1080p is not interpolated from a smaller
+sensor — but it is nearing an optical ceiling around ~280–300. Keep raising `--size` until this
+number stops climbing.
+
+If the number is poor at *every* subject distance, it's the lens rather than focus. These
+modules use M12/S-mount lenses, which have no focus ring — **the thread is the focus
+mechanism**, though it is often glued at the factory. Turn the barrel while watching:
 
 ```bash
 uv run quicksnap.py --device 0 --focus-assist --crop center:40%
@@ -53,13 +73,13 @@ uv run quicksnap.py --device 0 --focus-assist --crop center:40%
      9052.0   99.5% of best |#############################################|  <== PEAK
 ```
 
-Stop at the peak, lock the barrel (set screw or a dab of thread locker), then re-run
-`--measure` to confirm. On this rig that's worth ~7× linear resolution — more than every
-software stage in this tool put together.
+Stop at the peak, lock the barrel, then re-run `--measure` to confirm. If the barrel won't
+turn it is glued — that is common, and freeing it means heat or solvent, not a five-minute job.
 
-Why this matters more than it sounds: at ~9 cm a 320-px-wide panel spans ~1060 camera pixels,
-so a focused lens would resolve ~815 elements — **above the panel's own resolution**. Defocused,
-it resolves ~113. Same sensor, same distance, same code.
+Failing that, the lever that remains is **framing**: `resolvable across` is spread over the
+whole frame, so whatever you need to read should fill as much of it as possible. A 320-px panel
+occupying half the frame gets ~150 elements; filling the frame it gets ~290. Move the camera or
+re-aim it before reaching for any software stage.
 
 ### What was tried instead, and measured worse
 
