@@ -1,0 +1,8 @@
+{
+  "name": "quicksnap",
+  "version": "0.1.0",
+  "description": "Give Claude eyes at the electronics bench. Captures a clean webcam frame — scope screens, LCD/7-segment readouts, LED states, breadboard wiring, solder joints — for cases where a screenshot or UART dump won't cut it.",
+  "author": {
+    "name": "Oleksii Kruhlyk"
+  }
+}
